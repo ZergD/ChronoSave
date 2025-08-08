@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chronosave"
+version = "0.1.0"
+description = "Lightweight file change detector that saves versioned copies."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["rich>=14.0.0"]
+
+[project.scripts]
+chronosave = "main:main"
+
+[tool.setuptools]
+py-modules = ["main", "logging_setup", "log_utils"]

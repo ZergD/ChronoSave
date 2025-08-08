@@ -1,21 +1,15 @@
-"""
-I gave the main.py to ChatGPT 5 and this is his improvement.
-"""
-
-
 from __future__ import annotations
 
-from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Tuple, Dict
+import argparse
+import sys
 import datetime as dt
 import hashlib
 import shutil
-
-from pprint import pprint
-
 import logging
+
 from logging_setup import setup_logging
 from log_utils import section, kv, table, row
 from rich.table import Table
@@ -23,8 +17,6 @@ from rich.console import Console
 from rich.box import MINIMAL_DOUBLE_HEAD
 
 console = Console()
-
-
 logger = setup_logging(level="INFO", log_file="run.log", json_file=None)
 
 
@@ -42,26 +34,6 @@ class Filename:
         )
 
 
-# ---------- public API ----------
-
-# def fetch_needed_files(base: Path | None = None, pattern: str = "*.txt") -> Tuple[List[Filename], List[Filename]]:
-#     """
-#     Scan base (default: cwd) for files matching `pattern`, and `base/'saves'` for saved copies.
-#     Returns: (current_result_bag, saved_result_bag)
-#     """
-#     base = base or Path.cwd()
-#     saves_path = base / "saves"
-#     saves_path.mkdir(exist_ok=True)
-# 
-#     current_files = get_files_from_given_path(base, pattern)
-#     saved_files = get_files_from_given_path(saves_path, pattern)
-# 
-#     current_bag = [build_filename(p) for p in current_files]
-#     saved_bag = [build_filename(p) for p in saved_files]
-# 
-#     return current_bag, saved_bag
-
-
 def fetch_needed_files(base: Path | None = None, pattern: str = "*.txt"):
     base = base or Path.cwd()
     saves = base / "saves"
@@ -71,12 +43,11 @@ def fetch_needed_files(base: Path | None = None, pattern: str = "*.txt"):
     kv("base", base.resolve())
     kv("pattern", pattern)
     kv("saves dir", saves.resolve())
-    print("\n")
+    print()
 
     current = get_files_from_given_path(base, pattern)
     saved = get_files_from_given_path(saves, pattern)
 
-    # Build bags (your existing build_filename)
     current_bag = [build_filename(p) for p in current]
     saved_bag = [build_filename(p) for p in saved]
 
@@ -87,24 +58,15 @@ def fetch_needed_files(base: Path | None = None, pattern: str = "*.txt"):
 
 
 def compute_diff(current_bag: Iterable[Filename], saved_bag: Iterable[Filename], saves_dir: Path, dry_run: bool = False) -> List[Path]:
-    """
-    For each current file, if no identical saved copy exists (by sha256), copy into saves_dir
-    with an incrementing suffix: {stem}__saved_001{suffix}.
-    Returns list of created file paths.
-    """
     section("Computing diff", "🧮")
     kv("dry_run", dry_run)
     kv("saves_dir", saves_dir.resolve())
     saves_dir.mkdir(parents=True, exist_ok=True)
 
-    # Map: hash -> list of saved paths (quick inclusion test)
     saved_by_hash: Dict[str, List[Path]] = {}
     for s in saved_bag:
         saved_by_hash.setdefault(s.hashfile, []).append(s.fullpath)
-    # print("saved_by_hash looks like this:")
-    # pprint(saved_by_hash)
 
-    # Next index per base stem
     next_index: Dict[Tuple[str, str], int] = {}
     for s in saved_bag:
         stem, suffix = s.fullpath.stem, s.fullpath.suffix
@@ -112,14 +74,10 @@ def compute_diff(current_bag: Iterable[Filename], saved_bag: Iterable[Filename],
         key = (base_stem, suffix)
         idx = _idx or 0
         next_index[key] = max(next_index.get(key, 0), idx)
-    #  print("next_index looks like this:")
-    #  pprint(next_index)
-
 
     created: List[Path] = []
 
     for cur in current_bag:
-        # skip files that already exist in saves by hash
         if cur.hashfile in saved_by_hash:
             continue
 
@@ -131,13 +89,13 @@ def compute_diff(current_bag: Iterable[Filename], saved_bag: Iterable[Filename],
         target = saves_dir / f"{stem}__saved_{idx:03d}{suffix}"
 
         if not dry_run:
-            shutil.copy2(cur.fullpath, target)  # preserves mtime/metadata
+            shutil.copy2(cur.fullpath, target)
         created.append(target)
 
     if created:
         section("New saves created", "✅")
         table("Created", ({"target": str(p)} for p in created))
-        print("\n")
+        print()
     else:
         logger.info("✅ Nothing to save — everything up to date.\n")
 
@@ -152,7 +110,6 @@ def build_filename(p: Path) -> Filename:
         hashfile=get_hashfile(p),
         last_updated=get_latest_modified_timestamp(p),
     )
-
 
 
 def print_bag_of_filenames(bag: Iterable[Filename], title: str = "Files") -> None:
@@ -191,14 +148,12 @@ def get_latest_modified_timestamp(file: Path) -> dt.datetime:
 def get_files_from_given_path(path: Path, pattern: str = "*.txt") -> List[Path]:
     if not path.exists():
         return []
-    # Only files (no dirs), non-recursive. Adjust to rglob if needed.
-    return [p for p in path.glob(pattern) if p.is_file()]
+    files: List[Path] = [p for p in path.glob(pattern) if p.is_file()]
+    # exclude requirements.txt explicitly
+    return [p for p in files if p.name != "requirements.txt"]
 
 
 def split_saved_stem(stem: str) -> Tuple[str, int | None]:
-    """
-    Parse 'name__saved_012' -> ('name', 12). Otherwise ('name', None).
-    """
     marker = "__saved_"
     if marker in stem:
         base, suffix = stem.rsplit(marker, 1)
@@ -209,14 +164,41 @@ def split_saved_stem(stem: str) -> Tuple[str, int | None]:
     return stem, None
 
 
-# ---------- script usage ----------
+# ---------- CLI ----------
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        prog="chronosave",
+        description="ChronoSave — detect file changes and save versioned copies."
+    )
+    parser.add_argument(
+        "path",
+        type=Path,
+        nargs="?",
+        default=Path.cwd(),
+        help="Folder to scan (default: current directory)",
+    )
+    parser.add_argument(
+        "--pattern",
+        default="*.txt",
+        help="Glob pattern to match files (default: *.txt)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be saved without copying files",
+    )
+
+    args = parser.parse_args()
+
+    if not args.path.exists() or not args.path.is_dir():
+        print(f"❌ Error: {args.path} is not a valid directory", file=sys.stderr)
+        return 2
+
+    current_bag, saved_bag = fetch_needed_files(args.path, args.pattern)
+    compute_diff(current_bag, saved_bag, args.path / "saves", dry_run=args.dry_run)
+    return 0
+
 
 if __name__ == "__main__":
-    base = Path.cwd()
-    current_bag, saved_bag = fetch_needed_files(base)
-    # print("Current result bag:")
-    # print_bag_of_filenames(current_bag)
-    # print("Saved result bag:")
-    # print_bag_of_filenames(saved_bag)
-
-    created = compute_diff(current_bag, saved_bag, base / "saves", dry_run=False)
+    raise SystemExit(main())
