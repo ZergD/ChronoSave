@@ -80,6 +80,7 @@ saves_dir:   C:\Projects\ChronoSave\saves
 ```
 
 ## Example with pattern and dry run to see the potential result:
+Dry run means, it didn't do the copy but just shows what would happen:
 ```bash
 chronosave . --pattern "*.log" --dry-run
 
